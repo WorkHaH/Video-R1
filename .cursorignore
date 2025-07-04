@@ -1,0 +1,7 @@
+# Add directories or file patterns to ignore during indexing (e.g. foo/ or *.csv)
+src/r1-v/log/
+src/r1-v/wandb/
+src/r1-v/debug_log_2b.txt
+my_demo/data/
+Video-R1 paper.pdf
+wandb/
