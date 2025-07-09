@@ -260,7 +260,9 @@ def collate_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
             # labels[i, global_target_start:global_target_end] = inputs["input_ids"][i, global_target_start:global_target_end]
             labels[i, global_target_start:] = inputs["input_ids"][i, global_target_start:]
         else:
+            # If the target is not found, mask the entire assistant response.
             print(f"Warning: Target answer sequence not found within the response for example {i}.")
+            labels[i, response_start_index:] = -100
 
     # Mask padding and visual tokens for safety
     labels[labels == processor.tokenizer.pad_token_id] = -100
@@ -307,7 +309,7 @@ def set_model(model_args, model):
 
 if __name__ == "__main__":
     # Parse arguments
-    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
+    parser = TrlParser([ScriptArguments, SFTConfig, ModelConfig])
     script_args, training_args, model_config = parser.parse_args_and_config()
     
     # Configure training args

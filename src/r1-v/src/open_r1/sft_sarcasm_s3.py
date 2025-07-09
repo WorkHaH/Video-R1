@@ -28,7 +28,6 @@ from transformers import (
     BitsAndBytesConfig,
     Qwen2VLProcessor,
     Qwen2VLForConditionalGeneration,
-    Qwen2_5_VLForConditionalGeneration
 )
 from trl import (
     ModelConfig,
@@ -139,64 +138,40 @@ def collate_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     return inputs
 
 if __name__ == "__main__":
-     # Parse arguments
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
     
-    # Configure training args
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+    # We must remove columns because the custom trainer needs access to the original `messages`
+    # which would be removed otherwise. But since we are not using it inside, we can set it to False.
     training_args.remove_unused_columns = False
-    training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
-    # Load dataset
     if script_args.dataset_name.endswith('.json') or script_args.dataset_name.endswith('.jsonl'):
-        dataset =  DatasetDict({"train": Dataset.from_json(script_args.dataset_name)})
+        dataset = DatasetDict({"train": Dataset.from_json(script_args.dataset_name)})
     else:
-        # Load the dataset
         dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
-    # Setup model
     torch_dtype = (
         model_config.torch_dtype
         if model_config.torch_dtype in ["auto", None]
         else getattr(torch, model_config.torch_dtype)
     )
 
-    # # Quantization configuration for 4-bit training
-    # bnb_config = BitsAndBytesConfig(
-    #     load_in_4bit=True,
-    #     bnb_4bit_use_double_quant=True,
-    #     bnb_4bit_quant_type="nf4",
-    #     bnb_4bit_compute_dtype=torch.bfloat16
-    # )
+    bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_use_double_quant=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16)
 
-    # Model initialization
-    model_kwargs = dict(
-        revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
-        torch_dtype=torch_dtype,
-        # device_map=get_kbit_device_map(), # workhah,用zero3需要注释
-        # quantization_config=bnb_config,
-    )
+    model_kwargs = dict(revision=model_config.model_revision, trust_remote_code=True, torch_dtype=torch_dtype, quantization_config=bnb_config)
     
-    
-    if "Qwen2-VL" in model_config.model_name_or_path:
-        model = Qwen2VLForConditionalGeneration.from_pretrained(model_config.model_name_or_path, **model_kwargs)
-    elif "Qwen2.5-VL" in model_config.model_name_or_path:
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_config.model_name_or_path, **model_kwargs)
-    else:
-        model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    processor = AutoProcessor.from_pretrained(model_config.model_name_or_path, trust_remote_code=True)
 
-    processor = AutoProcessor.from_pretrained(
-        model_config.model_name_or_path,
-        trust_remote_code=model_config.trust_remote_code
-    )
-
-    # 路径配置
     IMG_DIR = "/data/guojian.li/Dataset/MMSD/dataset_image/"
 
-    # Prepare dataset
-    prepared_dataset = [prepare_dataset(example) for example in dataset['train']]
+    # Use .map for efficiency and correctness. This avoids linter errors with IterableDataset.
+    train_dataset = dataset['train'].map(
+        prepare_dataset, 
+        remove_columns=next(iter(dataset.values())).column_names,
+        num_proc=4
+    )
 
     if training_args.report_to == "wandb":
         wandb.init(project="video-llm-training-sarcasm-s3")
@@ -204,10 +179,10 @@ if __name__ == "__main__":
     trainer = CustomSFTTrainer(
         model=model,
         args=training_args,
-        train_dataset=prepared_dataset,
+        train_dataset=train_dataset,
         data_collator=collate_fn,
         peft_config=get_peft_config(model_config),
-        # tokenizer=processor.tokenizer # Pass tokenizer to trainer
+        tokenizer=processor.tokenizer # Pass tokenizer to trainer
     )
 
     trainer.train()
